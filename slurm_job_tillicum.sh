@@ -59,7 +59,7 @@ export GLYCO_CACHE=$BASE/reglyco_cache       # ReGlyco's glycan data: run  --sta
 # --- activate conda (Tillicum provides it as a module) and the light environment that runs the pipeline script ---
 module load conda 2>/dev/null || true
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate binder_pipeline
+conda activate "$BASE/envs/binder_pipeline"      # by full path: the env was made with  conda create -p  so it has no name conda can find
 
 echo "job $SLURM_JOB_ID on $(hostname), started $(date)"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
@@ -71,6 +71,11 @@ if [ "${BACKBONE_TOOL:-rfd4}" = rfd4 ]; then
     ls -d "$HF_HOME"/hub/models--nvidia--RFD4-Proteina >/dev/null 2>&1 \
         || { echo "ERROR: RFD4 weights not found in $HF_HOME: run  bash install_envs.sh rfd4_env  on the login node (compute nodes may have no internet)"; exit 1; }
     export HF_HUB_OFFLINE=1                  # use the downloaded weights; never wait for the network
+    # hand RFD4 the cached snapshot FOLDER: a local folder is loaded directly, while the repo name makes it ask huggingface.co for a file list (fails offline)
+    RFD4_SNAP=$(ls -d "$HF_HOME"/hub/models--nvidia--RFD4-Proteina/snapshots/*/ 2>/dev/null | head -n 1)
+    [ -f "${RFD4_SNAP}model.safetensors" ] && [ -f "${RFD4_SNAP}config.json" ] \
+        || { echo "ERROR: no complete RFD4 snapshot (config.json + model.safetensors) under $HF_HOME/hub/models--nvidia--RFD4-Proteina/snapshots/: run  bash install_envs.sh rfd4_env  on the login node"; exit 1; }
+    export RFD4_CKPT=${RFD4_SNAP%/}
 fi
 
 cd "$PROJECT"
