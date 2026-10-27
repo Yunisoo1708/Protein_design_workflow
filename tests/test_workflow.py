@@ -148,4 +148,31 @@ for r in rows6:
     assert r["pass"] == ("PASS" if ok else "fail"), "verdict must use iptm, plddt, rmsd AND pae_interaction"
 assert not (af3_run / "results_afserver.csv").exists(), "AF3 route must not overwrite the AlphaFold Server table"
 print("Test 6 passed: local AlphaFold 3 route (inputs, flags, collect, score incl. pae_interaction) works")
+
+# ---- Test 7: target template on the AF3 route -----------------------------------------------------------------
+from fake_tools import write_cif                                  # noqa: E402
+tmpl = work / "target_template.cif"
+write_cif(tmpl, "tmpl", {"A": [(names[i % 4], xyz) for i, xyz in enumerate(helix(40))]})   # 40 residues = the toy target
+af3_t = work / "run_af3_tmpl"
+shutil.copytree(run, af3_t, ignore=shutil.ignore_patterns("3_af*", "results*.csv"))
+for tag, cif, out_dir in (("ok", tmpl, af3_t), ("wrong_length", None, work / "run_af3_badtmpl")):
+    path = cif
+    if cif is None:                                               # a template with 39 residues instead of 40
+        path = work / "bad_template.cif"
+        write_cif(path, "tmpl", {"A": [(names[i % 4], xyz) for i, xyz in enumerate(helix(39))]})
+        shutil.copytree(run, out_dir, ignore=shutil.ignore_patterns("3_af*", "results*.csv"))
+    (work / f"settings_af3_{tag}.py").write_text(f"""
+import runpy
+S = runpy.run_path(r"{work / 'settings_af3.py'}")["SETTINGS"]
+S.update(output_dir=r"{out_dir}", af3_target_template_cif=r"{path}")
+SETTINGS = S
+""")
+pipeline(work / "settings_af3_ok.py", "--stages", "af3,score_af3")
+sent = json.loads(next((af3_t / "3_af3_inputs").glob("*.json")).read_text())["sequences"]
+assert sent[0]["protein"]["templates"] == [] and len(sent[1]["protein"]["templates"]) == 1, "template must be on the target (B) only"
+assert len(read_csv(af3_t / "results_af3.csv")) == 6
+bad = subprocess.run([sys.executable, PIPELINE, "--settings", str(work / "settings_af3_wrong_length.py"), "--stages", "af3"],
+                     capture_output=True, text=True)
+assert bad.returncode != 0 and "39 residues but the target sequence has 40" in bad.stderr, "a wrong-length template must stop the run"
+print("Test 7 passed: target template goes on chain B only; a wrong-length template is refused")
 print("\nALL TESTS PASSED")

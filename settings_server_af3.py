@@ -37,6 +37,10 @@ SETTINGS = {
     # None = no genetic databases: each chain from its single sequence (fast, no 630 GB download, but the target
     # is predicted less reliably). Or give the folder made by ~/tools/alphafold3/fetch_databases.sh.
     "af3_db_dir": None,
+    # Known structure of the TARGET, as a template (strongly recommended; see make_af3_template.py). None = no template.
+    # Residue i of the target sequence must be residue i of the template. Example for the 5YXH run:
+    #   python make_af3_template.py --pdb 5YXH.pdb --chain A --ranges 16-108,113-151 --out 5YXH_target_template.cif
+    "af3_target_template_cif": None,
     "af3_diffusion_samples": 1,        # AF3 default is 5; 1 is much faster, raise it for the final shortlist
     "af3_flash_attention": "xla",      # "triton" is faster but may not support the Blackwell card; "xla" is safe
     "af3_seed": 1,

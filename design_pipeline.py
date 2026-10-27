@@ -337,12 +337,21 @@ def step3_af3(S, jobs, out):
     in_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
     no_msa = not S.get("af3_db_dir")
+    # Optional: hand AF3 the TARGET's known structure as a template (make the file with make_af3_template.py).
+    # Without it AF3 cannot fold a target like a small GTPase from one sequence (tested: 16 A off; with it 1.2 A).
+    template = Path(S["af3_target_template_cif"]).read_text() if S.get("af3_target_template_cif") else None
     for j in jobs:                                                  # one input JSON per design
         chains = []
         for chain_id, seq in (("A", j["binder_seq"]), ("B", j["target_seq"])):   # binder = A, target = B
             protein = {"id": chain_id, "sequence": seq}
             if no_msa:      # empty strings = "do not search for an MSA / templates"
                 protein.update(unpairedMsa="", pairedMsa="", templates=[])
+            if chain_id == "B" and template:
+                n_res = sum(1 for l in template.splitlines() if l.startswith("ATOM") and l.split()[3] == "CA")
+                if n_res != len(seq):    # residue i of the target must be residue i of the template
+                    raise ValueError(f"{j['job']}: template has {n_res} residues but the target sequence has {len(seq)}")
+                protein["templates"] = [{"mmcif": template, "queryIndices": list(range(len(seq))),
+                                         "templateIndices": list(range(len(seq)))}]
             chains.append({"protein": protein})
         (in_dir / f"{af3_name(j)}.json").write_text(json.dumps(
             {"name": af3_name(j), "modelSeeds": [S.get("af3_seed", 1)], "sequences": chains,

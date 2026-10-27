@@ -183,8 +183,13 @@ def af3(args):
         assert job["dialect"] == "alphafold3" and job["version"] in (1, 2, 3, 4) and job["modelSeeds"], "bad AF3 input header"
         assert [s["protein"]["id"] for s in job["sequences"]] == ["A", "B"], "binder must be chain A, target chain B"
         if flags.get("run_data_pipeline") == "false":
-            assert all(s["protein"]["unpairedMsa"] == "" and s["protein"]["templates"] == [] for s in job["sequences"]), \
-                "without databases the input must say 'no MSA, no templates' explicitly"
+            assert all(s["protein"]["unpairedMsa"] == "" and s["protein"]["pairedMsa"] == "" for s in job["sequences"]), \
+                "without databases the input must say 'no MSA' explicitly"
+            a_chain, b_chain = (s["protein"] for s in job["sequences"])
+            assert a_chain["templates"] == [], "the binder must never get a template"
+            for t in b_chain["templates"]:       # a template is only allowed on the target, and must line up 1:1
+                n = len(b_chain["sequence"])
+                assert t["queryIndices"] == t["templateIndices"] == list(range(n)) and "data_" in t["mmcif"], "bad target template"
         name = job["name"]
         assert name == name.lower(), "AF3 job names must already be lower-case"
         seqs = {s["protein"]["id"]: s["protein"]["sequence"] for s in job["sequences"]}
