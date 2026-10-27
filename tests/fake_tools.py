@@ -169,5 +169,59 @@ def af2(args):
     Path(a.scorefilename).write_text("\n".join(lines) + "\n")
 
 
+# ---------------------------------------------------------------- local AlphaFold 3 (run_alphafold.py)
+def af3(args):
+    """Pretend to be run_alphafold.py: read every <input_dir>/*.json and write the files AF3 writes:
+    <output_dir>/<name>/<name>_model.cif, <name>_summary_confidences.json, <name>_confidences.json
+    (the last one holds the PAE matrix and token_chain_ids). Also checks the command line and input JSON the
+    pipeline produced, so a wrong flag or input format fails the test."""
+    flags = dict(x[2:].split("=", 1) for x in args if x.startswith("--") and "=" in x)
+    for needed in ("input_dir", "output_dir", "model_dir", "num_diffusion_samples", "flash_attention_implementation"):
+        assert needed in flags, f"pipeline did not pass --{needed}"
+    for j in sorted(Path(flags["input_dir"]).glob("*.json")):
+        job = json.loads(j.read_text())
+        assert job["dialect"] == "alphafold3" and job["version"] in (1, 2, 3, 4) and job["modelSeeds"], "bad AF3 input header"
+        assert [s["protein"]["id"] for s in job["sequences"]] == ["A", "B"], "binder must be chain A, target chain B"
+        if flags.get("run_data_pipeline") == "false":
+            assert all(s["protein"]["unpairedMsa"] == "" and s["protein"]["templates"] == [] for s in job["sequences"]), \
+                "without databases the input must say 'no MSA, no templates' explicitly"
+        name = job["name"]
+        assert name == name.lower(), "AF3 job names must already be lower-case"
+        seqs = {s["protein"]["id"]: s["protein"]["sequence"] for s in job["sequences"]}
+        run_dir = Path(flags["output_dir"]).parent
+        backbone = read_pdb(run_dir / "1_rfdiffusion" / (name.rsplit("_s", 1)[0] + ".pdb"))
+        rng = np.random.default_rng(zlib.crc32(name.encode()))
+        sigma = float(rng.uniform(0.1, 3.0))
+        gly = {c: np.mean([r == "GLY" for r, _ in res]) for c, res in backbone.items()}
+        b_src = max(gly, key=gly.get)
+        t_src = [c for c in backbone if c != b_src][0]
+        noise = rng.normal(0, sigma, (len(seqs["A"]), 3))
+        binder = np.array([x for _, x in backbone[b_src]]) + noise
+        target = np.array([x for _, x in backbone[t_src]])
+        q, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+        q *= np.sign(np.linalg.det(q))
+        shift = rng.normal(0, 20, 3)
+        model = {"A": [(seq3(a_).upper(), x) for a_, x in zip(seqs["A"], binder @ q + shift)],
+                 "B": [(seq3(a_).upper(), x) for a_, x in zip(seqs["B"], target @ q + shift)]}
+        d = Path(flags["output_dir"]) / name
+        d.mkdir(parents=True, exist_ok=True)
+        write_cif(d / f"{name}_model.cif", name, model)
+        iptm = float(np.clip(0.95 - 0.12 * sigma + rng.normal(0, 0.03), 0, 1))
+        (d / f"{name}_summary_confidences.json").write_text(json.dumps(
+            {"iptm": iptm, "ptm": 0.8, "ranking_score": iptm, "fraction_disordered": 0.0, "has_clash": 0.0}))
+        n_a, n_b = len(seqs["A"]), len(seqs["B"])
+        plddt = np.clip(np.concatenate([rng.normal(92 - 8 * sigma, 2, n_a), rng.normal(90, 2, n_b)]), 0, 100)
+        pae = np.full((n_a + n_b, n_a + n_b), 2.0)                       # blocks with known values:
+        a_to_b, b_to_a = 3.0 + sigma, 5.0 + sigma                       # expected pae_interaction = their mean
+        pae[:n_a, n_a:], pae[n_a:, :n_a] = a_to_b, b_to_a
+        (d / f"{name}_confidences.json").write_text(json.dumps(
+            {"atom_chain_ids": ["A"] * n_a + ["B"] * n_b, "atom_plddts": plddt.tolist(),
+             "token_chain_ids": ["A"] * n_a + ["B"] * n_b, "pae": pae.tolist()}))
+        (d / f"{name}_truth.json").write_text(json.dumps(
+            {"expected_rmsd_binder": float(np.sqrt((noise ** 2).sum(axis=1).mean())),
+             "expected_pae_interaction": (a_to_b + b_to_a) / 2}))
+    print("fake AlphaFold 3 done")
+
+
 if __name__ == "__main__":
-    {"rfdiffusion": rfdiffusion, "mpnn": mpnn, "afserver": afserver, "af2": af2}[sys.argv[1]](sys.argv[2:])
+    {"rfdiffusion": rfdiffusion, "mpnn": mpnn, "afserver": afserver, "af2": af2, "af3": af3}[sys.argv[1]](sys.argv[2:])

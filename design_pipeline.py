@@ -22,6 +22,11 @@ How to run (inside WSL / Linux, where the tools live):
   python design_pipeline.py --stages score_af2      # re-run only some steps (rfd, mpnn, af2, score_af2)
   python design_pipeline.py --stages rfd,mpnn,afs_export   # then upload afserver_jobs.json to alphafoldserver.com
   python design_pipeline.py --stages afs_import,score_afs --afserver_zips <folder of downloaded zips>
+
+Local AlphaFold 3 (needs the "af3" conda env, the AF3 model parameters and a settings file with the af3_* keys,
+see settings_server_af3.py). It gives iPTM, pLDDT, RMSD and pae_interaction, with no daily limit:
+  python design_pipeline.py --settings settings_server_af3.py --stages af3,score_af3
+  python design_pipeline.py --settings settings_server_af3.py --stages rfd,mpnn,af3,score_af3   # the whole chain
 """
 import argparse
 import csv
@@ -315,6 +320,56 @@ def read_af2_scores(af2_out_dir):
 
 
 # ----------------------------------------------------------------------------
+# Step 3 (local AlphaFold 3 route): google-deepmind/alphafold3 run on this machine.
+#   Same result files as the AlphaFold Server route, so scoring is shared (see step4_score_afs).
+#   Needs: an "af3" env, the AF3 model parameters (you request them from Google yourself) and an NVIDIA GPU with
+#   compute capability >= 8.0 (the RTX 5060 Ti is fine, the GTX 1660 is NOT - always pin AF3 to the new card).
+#   Without genetic databases ("af3_db_dir": None) each chain is predicted from its single sequence, no MSA and
+#   no templates. That is quick and needs no 630 GB download, but the TARGET fold is less reliable.
+# ----------------------------------------------------------------------------
+def af3_name(job):
+    """AlphaFold 3 lower-cases the job name and replaces odd characters in its output folder; do the same."""
+    return re.sub(r"[^a-z0-9_\-.]", "_", job["job"].lower())
+
+
+def step3_af3(S, jobs, out):
+    in_dir, out_dir = out / "3_af3_inputs", out / "3_af3_outputs"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    no_msa = not S.get("af3_db_dir")
+    for j in jobs:                                                  # one input JSON per design
+        chains = []
+        for chain_id, seq in (("A", j["binder_seq"]), ("B", j["target_seq"])):   # binder = A, target = B
+            protein = {"id": chain_id, "sequence": seq}
+            if no_msa:      # empty strings = "do not search for an MSA / templates"
+                protein.update(unpairedMsa="", pairedMsa="", templates=[])
+            chains.append({"protein": protein})
+        (in_dir / f"{af3_name(j)}.json").write_text(json.dumps(
+            {"name": af3_name(j), "modelSeeds": [S.get("af3_seed", 1)], "sequences": chains,
+             "dialect": "alphafold3", "version": 2}, indent=1))
+
+    cmd = list(S["af3_cmd"]) + [f"--input_dir={in_dir}", f"--output_dir={out_dir}",
+                                f"--model_dir={S['af3_model_dir']}",
+                                f"--num_diffusion_samples={S.get('af3_diffusion_samples', 1)}",
+                                f"--flash_attention_implementation={S.get('af3_flash_attention', 'xla')}"]
+    cmd.append("--run_data_pipeline=false" if no_msa else f"--db_dir={S['af3_db_dir']}")
+    run(cmd + [str(a) for a in S.get("af3_extra_args", [])], S.get("af3_env"))
+
+    # put the three result files where the shared scorer (score_afs / score_af3) looks for them
+    for j in jobs:
+        src, name = out_dir / af3_name(j), af3_name(j)
+        cif, summary, conf = afs_files(out, j["job"])
+        if not (src / f"{name}_model.cif").exists():
+            print(f"  ! no AlphaFold 3 result for {j['job']} (expected {src}), skipped")
+            continue
+        cif.parent.mkdir(parents=True, exist_ok=True)
+        for from_name, to_path in ((f"{name}_model.cif", cif), (f"{name}_summary_confidences.json", summary),
+                                   (f"{name}_confidences.json", conf)):
+            to_path.write_bytes((src / from_name).read_bytes())
+    print("  -> done. Now run:  --stages score_af3")
+
+
+# ----------------------------------------------------------------------------
 # Step 4: Score  (iPTM, pLDDT, RMSD)
 # ----------------------------------------------------------------------------
 def make_fitter(moving, fixed):
@@ -357,26 +412,39 @@ def score_job_afs(job, out):
     move = make_fitter(pred_target, ref_target)             # 1) line up the TARGETS
     rmsd_binder = rmsd(move(pred_binder), ref_binder)       # 2) then measure how far the BINDER moved
 
-    return {"job": job["job"], "iptm": round(iptm, 3),
-            "plddt_binder": round(float(plddt[is_binder].mean()), 1),
-            "plddt_complex": round(float(plddt.mean()), 1),
-            "rmsd_binder": round(rmsd_binder, 2),
-            "mpnn_score": job["mpnn_score"], "binder_seq": job["binder_seq"]}
+    row = {"job": job["job"], "iptm": round(iptm, 3),
+           "plddt_binder": round(float(plddt[is_binder].mean()), 1),
+           "plddt_complex": round(float(plddt.mean()), 1),
+           "rmsd_binder": round(rmsd_binder, 2)}
+
+    # --- pae_interaction: mean predicted error (A) between binder tokens and target tokens, both directions.
+    #     Same idea as the AF2 score, so the two routes can be compared. Lower = better.
+    if "pae" in conf and "token_chain_ids" in conf:
+        pae, chains = np.array(conf["pae"]), np.array(conf["token_chain_ids"])
+        a, b = chains == "A", chains == "B"
+        row["pae_interaction"] = round(float((pae[np.ix_(a, b)].mean() + pae[np.ix_(b, a)].mean()) / 2), 2)
+
+    row.update({"mpnn_score": job["mpnn_score"], "binder_seq": job["binder_seq"]})
+    return row
 
 
-def step4_score_afs(S, jobs, out):
+def step4_score_afs(S, jobs, out, csv_name="results_afserver.csv", use_pae=False):
+    """Shared by the AlphaFold Server route (score_afs) and the local AlphaFold 3 route (score_af3).
+    use_pae=True also requires pae_interaction <= max_pae_interaction, like the AF2 route does."""
     # only score the jobs whose results were imported (a daily limit means you may send just a few)
     jobs = [j for j in jobs if afs_files(out, j["job"])[1].exists()]
     rows = [score_job_afs(j, out) for j in jobs]
     for r in rows:  # rule-of-thumb pass mark; change the limits in the settings file
         ok = r["iptm"] >= S.get("min_iptm", 0.8) and r["plddt_binder"] >= S["min_plddt"] and r["rmsd_binder"] <= S["max_rmsd"]
+        if use_pae:
+            ok = ok and r.get("pae_interaction", float("inf")) <= S.get("max_pae_interaction", 10)
         r["pass"] = "PASS" if ok else "fail"
     rows.sort(key=lambda r: r["iptm"], reverse=True)   # best first
-    write_csv(out / "results_afserver.csv", rows)
-    print(f"\n{'job':<16}{'iptm':>6}{'plddt_binder':>14}{'rmsd_binder':>13}  verdict")
+    write_csv(out / csv_name, rows)
+    print(f"\n{'job':<16}{'iptm':>6}{'pae_inter':>10}{'plddt_binder':>14}{'rmsd_binder':>13}  verdict")
     for r in rows:
-        print(f"{r['job']:<16}{r['iptm']:>6}{r['plddt_binder']:>14}{r['rmsd_binder']:>13}  {r['pass']}")
-    print(f"\nSaved: {out / 'results_afserver.csv'}   ({sum(r['pass'] == 'PASS' for r in rows)}/{len(rows)} pass)")
+        print(f"{r['job']:<16}{r['iptm']:>6}{r.get('pae_interaction', '-'):>10}{r['plddt_binder']:>14}{r['rmsd_binder']:>13}  {r['pass']}")
+    print(f"\nSaved: {out / csv_name}   ({sum(r['pass'] == 'PASS' for r in rows)}/{len(rows)} pass)")
 
 
 def score_job_af2(job, out, af2_scores):
@@ -445,7 +513,7 @@ def main():
     if "mpnn" in stages:
         print("\n[2/4] ProteinMPNN: designing sequences")
         step2_mpnn(S, sorted((out / "1_rfdiffusion").glob("design_*.pdb")), out)
-    jobs = read_csv(out / "2_mpnn" / "sequences.csv") if {"af2", "score_af2", "afs_export", "afs_import", "score_afs"} & set(stages) else []
+    jobs = read_csv(out / "2_mpnn" / "sequences.csv") if {"af2", "score_af2", "afs_export", "afs_import", "score_afs", "af3", "score_af3"} & set(stages) else []
     if "afs_export" in stages:
         print("\n[3/4] AlphaFold Server: export jobs")
         step3_afserver_export(jobs, out)
@@ -461,6 +529,12 @@ def main():
     if "score_afs" in stages:
         print("\n[4/4] Scoring (AlphaFold Server results)")
         step4_score_afs(S, jobs, out)
+    if "af3" in stages:
+        print("\n[3/4] AlphaFold 3 (local): predicting binder + target")
+        step3_af3(S, jobs, out)
+    if "score_af3" in stages:
+        print("\n[4/4] Scoring (local AlphaFold 3)")
+        step4_score_afs(S, jobs, out, csv_name="results_af3.csv", use_pae=True)
 
 
 if __name__ == "__main__":

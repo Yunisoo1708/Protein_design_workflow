@@ -126,4 +126,26 @@ assert sorted(p.name for p in (cp / "3_af2_outputs").iterdir()) == ["w0", "w1", 
 same = {r["job"]: r for r in read_csv(cp / "results_af2.csv")}
 assert same.keys() == serial.keys() and all(same[j]["rmsd_binder"] == serial[j]["rmsd_binder"] for j in serial)
 print("Test 5 passed: 'copies' runs several workers on one GPU with the same results")
+
+# ---- Test 6: local AlphaFold 3 route (af3 -> score_af3), fake run_alphafold.py -----------------------------
+af3_run = work / "run_af3"
+shutil.copytree(run, af3_run, ignore=shutil.ignore_patterns("3_af*", "results*.csv"))
+(work / "settings_af3.py").write_text(f"""
+import runpy
+S = runpy.run_path(r"{HERE / 'settings_test.py'}")["SETTINGS"]
+S.update(output_dir=r"{af3_run}", af3_cmd=[r"{sys.executable}", r"{HERE / 'fake_tools.py'}", "af3"],
+         af3_model_dir=r"{work / 'af3_models'}", af3_db_dir=None, max_pae_interaction=10)
+SETTINGS = S
+""")
+pipeline(work / "settings_af3.py", "--stages", "af3,score_af3")
+rows6 = read_csv(af3_run / "results_af3.csv")
+assert len(rows6) == 6 and all(0 <= float(r["iptm"]) <= 1 for r in rows6)
+for r in rows6:
+    truth = json.loads((af3_run / "3_af3_outputs" / r["job"].lower() / f"{r['job'].lower()}_truth.json").read_text())
+    assert abs(float(r["rmsd_binder"]) - truth["expected_rmsd_binder"]) < 0.02, "AF3-route RMSD does not match the known error"
+    assert abs(float(r["pae_interaction"]) - truth["expected_pae_interaction"]) < 0.01, "pae_interaction does not match the known value"
+    ok = float(r["iptm"]) >= 0.8 and float(r["plddt_binder"]) >= 80 and float(r["rmsd_binder"]) <= 2.0 and float(r["pae_interaction"]) <= 10
+    assert r["pass"] == ("PASS" if ok else "fail"), "verdict must use iptm, plddt, rmsd AND pae_interaction"
+assert not (af3_run / "results_afserver.csv").exists(), "AF3 route must not overwrite the AlphaFold Server table"
+print("Test 6 passed: local AlphaFold 3 route (inputs, flags, collect, score incl. pae_interaction) works")
 print("\nALL TESTS PASSED")
