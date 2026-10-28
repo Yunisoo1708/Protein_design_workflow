@@ -22,12 +22,13 @@ python design_pipeline.py --settings <settings file> --stages <steps>
 | `--output_dir` | write to this folder instead of the one in the settings file |
 | `--afserver_zips` | folder of `fold_*.zip` files downloaded from alphafoldserver.com (only for `afs_import`) |
 
-Stage names: `rfd`, `mpnn`, `af2`, `score_af2` (main route) - `afs_export`, `afs_import`, `score_afs` (optional AlphaFold Server route).
+Stage names: `rfd`, `mpnn`, `af2`, `score_af2` (main route) - `afs_export`, `afs_import`, `score_afs` (optional AlphaFold Server route) - `af3`, `score_af3` (local AlphaFold 3, branch `af3-local`).
 
-### The two ways to check designs (step 3)
+### The three ways to check designs (step 3)
 | Route | Command | Gives |
 |---|---|---|
 | AF2 "initial guess" (Bennett lab), the main route | `--stages rfd,mpnn,af2,score_af2` | `results_af2.csv`: pAE_interaction (instead of iPTM), pLDDT, RMSD |
+| Local AlphaFold 3 (needs the `af3` env + parameters, see `settings_server_af3.py`) | `--settings settings_server_af3.py --stages af3,score_af3` | `results_af3.csv`: iPTM, pAE_interaction, pLDDT, RMSD; several samples per design and an optional target template |
 | AlphaFold Server (website), optional, the only route with iPTM | `--stages rfd,mpnn,afs_export`, upload `afserver_jobs.json` at alphafoldserver.com, download the zips, then `--stages afs_import,score_afs --afserver_zips <folder>` | `results_afserver.csv`: iPTM, pLDDT, RMSD |
 
 ### Example (GPU server, AF2 route)
@@ -69,6 +70,12 @@ It uses pretend tools to check the plumbing and the score maths. It cannot judge
 | `settings_big_gpu.py` | one big GPU (L40S / H200); worker counts can be set per run, e.g. `AF2_WORKERS=16` | often |
 | `settings.py` | beginner template for one GPU (AF2 route) | yes, to start |
 | `settings_server.py`, `settings_server_large.py` | base / older server settings the others build on | rarely |
+| `settings_server_af3.py` | local AlphaFold 3 settings (env, parameters, samples, optional target template) | yes, for AF3 |
+| `settings_server_af3_5YXH.py`, `settings_rfd4_af3_5YXH.py` | worked examples for target 5YXH (AF3 on RFdiffusion+MPNN designs; AF3 on RFD4 designs) | copy and adapt |
+| `make_af3_template.py` | cuts the target out of a PDB as an AF3 template mmCIF | when using a template |
+| `rfd4_to_af3_jobs.py`, `rfd4_af3_report.py` | convert RFD4 designs for the AF3 stages / summarise the AF3 check | see `rfd4/README.md` |
+| `rfd4/` | RFD4 route: task specs, reward-guided search, partial re-noising, native-AF3 shim, example results | see `rfd4/README.md` |
+| `prepared_protein_structure/` | the example target (5YXH) and its AF3 template | read only |
 | `tests/` | `test_workflow.py` (run it), `fake_tools.py` (pretend tools), `settings_test.py` | run, do not edit |
 | `real_run/` | example results and timings copied here by hand; the pipeline never writes to it | read only |
 

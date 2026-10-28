@@ -1,4 +1,6 @@
-# Binder design: RFdiffusion → ProteinMPNN → AlphaFold2 (Bennett "initial guess")
+# Binder design: RFdiffusion → ProteinMPNN → AlphaFold2 (Bennett "initial guess") or AlphaFold 3
+
+The main route checks designs with AF2. The `af3-local` branch adds a local **AlphaFold 3** check (iPTM, optional target template, several diffusion samples) and an **RFD4** route that designs backbone and sequence together (folder `rfd4/`).
 
 ```
 target.pdb ─► [1 RFdiffusion] ─► backbones ─► [2 ProteinMPNN] ─► sequences ─► [3 AF2 initial guess] ─► [4 Score] ─► results_af2.csv
@@ -30,6 +32,15 @@ The only route that gives iPTM, and it needs nothing installed:
 1. `--stages rfd,mpnn,afs_export` writes `afserver_jobs.json`.
 2. Upload it at alphafoldserver.com (Upload JSON; needs a Google login; the site has a daily job limit, so send only your best designs) and download the result `.zip` files into one folder.
 3. `--stages afs_import,score_afs --afserver_zips <that folder>` gives `results_afserver.csv` with `iptm`, `plddt_binder`, `rmsd_binder`.
+
+## Local AlphaFold 3 (`af3`, `score_af3` stages)
+Gives `iptm` without a website or a daily limit. Needs the AF3 code in its own conda env, the AF3 model parameters (`af3.bin.zst`, obtained from DeepMind under their terms) and a GPU with compute capability 8.0+. No sequence databases are used (single-sequence mode).
+`python design_pipeline.py --settings settings_server_af3.py --stages af3,score_af3` writes `results_af3.csv` (`iptm`, `pae_interaction`, `plddt_binder`, `rmsd_binder`).
+Two settings matter most: `af3_diffusion_samples` (several predictions per design; a stable prediction agrees across them) and `af3_target_template_cif` (the target's own structure as a template, made with `make_af3_template.py`). Without a template AF3 often cannot fold a small domain target on its own, and `rmsd_binder` is then meaningless.
+Measured on one RTX 5060 Ti: 250 predictions (50 designs x 5 samples) take about 20 minutes. AF3 is a different predictor from AF2, so its numbers are not interchangeable with `results_af2.csv`.
+
+## RFD4 route (`rfd4/`)
+RFD4 (RFD4-Proteina) designs backbone and sequence together, so ProteinMPNN is not used. `rfd4/README.md` explains the whole chain: generate, convert (`rfd4_to_af3_jobs.py`), AF3 check, report (`rfd4_af3_report.py`), plus optional reward-guided search and partial re-noising around a good design.
 
 ## GPU server notes (`settings_server.py`, `settings_server_large.py`)
 - RTX 5060 Ti (new) runs RFdiffusion and AF2; GTX 1660 SUPER (old) can run ProteinMPNN. Pick a card per tool with `*_env: {"CUDA_VISIBLE_DEVICES": "0"}`.

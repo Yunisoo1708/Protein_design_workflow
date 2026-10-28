@@ -1,11 +1,15 @@
 """
-Protein binder design pipeline:   RFdiffusion  ->  ProteinMPNN  ->  AlphaFold2 "initial guess" (Bennett lab)
+Protein binder design pipeline:   RFdiffusion  ->  ProteinMPNN  ->  structure check (AF2 "initial guess", or local AlphaFold 3)
 
 What each tool does (one line each):
   1. RFdiffusion : draws NEW protein backbones (just the "skeleton", no sequence) that stick to your target.
   2. ProteinMPNN : writes amino-acid sequences that should fold into each skeleton.
   3. AF2 (dl_binder_design, Bennett et al.) : predicts the structure of (binder + target) from each sequence,
                    starting from the designed backbone, to check that the design is self-consistent.
+     or AF3 (run locally, see below): the same check with iPTM, optionally told the target's structure as a template.
+
+Steps 1-2 can be replaced by RFD4 (RFD4-Proteina), which designs backbone and sequence together. Its designs are
+converted for the AF3 stages by rfd4_to_af3_jobs.py; everything RFD4-related lives in rfd4/ (start with rfd4/README.md).
 
 Final table (results_af2.csv) has, for every designed sequence:
   pae_interaction  how sure AF2 is about the binder's position relative to the target.  Lower = better (<10 is good)
@@ -27,6 +31,9 @@ Local AlphaFold 3 (needs the "af3" conda env, the AF3 model parameters and a set
 see settings_server_af3.py). It gives iPTM, pLDDT, RMSD and pae_interaction, with no daily limit:
   python design_pipeline.py --settings settings_server_af3.py --stages af3,score_af3
   python design_pipeline.py --settings settings_server_af3.py --stages rfd,mpnn,af3,score_af3   # the whole chain
+Useful AF3 settings keys: af3_diffusion_samples (predictions per design), af3_target_template_cif (a single-chain mmCIF of
+the target, made with make_af3_template.py; it is attached to the target chain so AF3 only has to place the binder).
+Results go to results_af3.csv (iptm, pae_interaction, plddt_binder, rmsd_binder, pass).
 """
 import argparse
 import csv
