@@ -28,6 +28,13 @@ The models read **CIF**, not your PDB. Two small scripts write them from the PDB
 - `make_af3_template.py` → `work/target_template.cif`: the target alone, as an AF3 *template*. AF3 is told what the target looks like and only has to place the binder.
 - `make_rfd4_input.py` → `work/rfd4_input.cif`, `rfd4_spec.yaml`, `rfd4_target_seq.txt`: one chain per unbroken target piece, the spec that fixes the target's coordinates and sequence, and the sequence the converter checks against. `--check` loads the spec like RFD4 does and stops if the target is not fully fixed.
 
+## 2b. Logging every iteration (Obsidian)
+After a run that reached a scoring stage, `python log_iteration.py --run <output_dir> --title "..." --goal "..." --parent <previous slug>` writes draft notes
+(`iteration_note/binder-design/`): the setup, the generated results, the top and passing designs, and TODO fields for findings, caveats and next step.
+Fill those in, copy the folder into the vault without overwriting (`rsync --ignore-existing`), and rebuild the overview with `--reindex`. The exact commands and the
+rules for writing the interpretation are in [AGENTS.md](AGENTS.md). Each output folder carries `run_info.json` (every invocation of `design_pipeline.py`) and, for
+`./setup.sh run-rfd4`, `run_meta.json`; those are what a note cites as its provenance.
+
 ## 3. Gotchas that cost time
 - **Fresh `output_dir` for every run.** Old files in a reused folder get mixed into new results (ProteinMPNN reads every `design_*.pdb`).
 - **Tool Pythons are separate.** Each tool points at the Python of its own conda env as a **full path** ending in `/bin/python`; `~` is not expanded.

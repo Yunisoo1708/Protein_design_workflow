@@ -186,6 +186,17 @@ step_run_rfd4() {
   [ -f work/rfd4_input.cif ] && [ -f work/target_template.cif ] || step_example
   [ "$(cfg ROUTE)" = rfd4_af3 ] || die "settings.py ROUTE is '$(cfg ROUTE)'; run this with ROUTE=rfd4_af3 (the default)"
   [ -e "$OUT/results_af3.csv" ] || [ ! -e "$OUT/1_rfdiffusion" ] || die "$OUT already holds a run; set a new output_dir (old files would mix into the new results)"
+  run mkdir -p "$OUT"
+  # facts about HOW this run was made, for log_iteration.py (the AF3 stage records its own settings in run_info.json)
+  [ "$DRY" = 1 ] || "$PYTHON" - "$OUT/run_meta.json" "$NDES" "$SEARCH" "$(cfg rfd4_hf_revision)" "$(cfg af3_diffusion_samples)" <<'PY'
+import json, sys, datetime
+p, n, search, rev, samples = sys.argv[1:6]
+json.dump({"route": "rfd4_af3", "generator": "RFD4-Proteina" + (" + reward-guided beam search" if search == "1" else ""),
+           "n_designs_requested": int(n), "rfd4_weights_revision": rev[:12],
+           "search_reward": "AF3 pLDDT of the designed chain (stock AF3 via the apptainer shim)" if search == "1" else "none",
+           "checker": f"AF3 with target template, {samples} diffusion samples per design",
+           "created": datetime.datetime.now().isoformat(timespec="seconds")}, open(p, "w"), indent=1)
+PY
   say "1/4 RFD4 generates $NDES designs$([ "$SEARCH" = 1 ] && echo ' with reward-guided search')"
   local cmd=("$(cfg rfd4_bin)" inputs="$HERE/work/rfd4_spec.yaml" hf_ckpt_path="$(cfg rfd4_hf_repo)" hf_ckpt_revision="$(cfg rfd4_hf_revision)"
              num_replicates="$NDES" out_dir="$GEN" compile_lengths=null)
@@ -205,6 +216,9 @@ step_run_rfd4() {
   run "$PIPELINE_PY" design_pipeline.py --settings settings.py
   say "4/4 report"
   run "$PY" rfd4_af3_report.py --run "$OUT" --hotspots "$(cfg HOTSPOTS)" --target_ranges "$(cfg TARGET_RANGES)"
+  say "draft notes for the Obsidian vault -> $OUT/iteration_note/binder-design/"
+  run "$PYTHON" log_iteration.py --run "$OUT" --title "RFD4 run $(date +%F): $NDES designs$([ "$SEARCH" = 1 ] && echo ', reward-guided search')" --target "$(basename "$(cfg TARGET_PDB)" .pdb)"
+  echo "  Next (see AGENTS.md): fill in Findings / Caveats / Next step, then copy that binder-design/ folder into the vault and run --reindex."
 }
 
 case "$STEP" in

@@ -175,4 +175,32 @@ bad = subprocess.run([sys.executable, PIPELINE, "--settings", str(work / "settin
                      capture_output=True, text=True)
 assert bad.returncode != 0 and "39 residues but the target sequence has 40" in bad.stderr, "a wrong-length template must stop the run"
 print("Test 7 passed: target template goes on chain B only; a wrong-length template is refused")
+
+# ---- Test 8: iteration notes for the Obsidian vault (log_iteration.py)
+run8, vault = work / "run_logged", work / "vault"
+run8.mkdir()
+(run8 / "results_af3.csv").write_text(
+    "job,iptm,plddt_binder,plddt_complex,rmsd_binder,pae_interaction,mpnn_score,binder_seq,pass\n"
+    "rfd4_0,0.82,90.4,86.3,1.23,6.62,NA,AAAAACCCCCDDDDD,PASS\n"
+    "rfd4_1,0.31,70.0,70.0,30.0,20.0,NA,EEEEEFFFFFGGGGG,fail\n"
+    "rfd4_2,0.12,60.0,60.0,45.0,25.0,NA,HHHHHIIIIIKKKKK,fail\n")
+(run8 / "run_info.json").write_text(json.dumps({"invocations": [{"time": "t", "stages": ["af3", "score_af3"], "code_version": "abc1234",
+                                                                   "settings": {"af3_diffusion_samples": 5, "binder_length": "50-80"}}]}))
+LOG = str(HERE.parent / "log_iteration.py")
+cmd8 = [sys.executable, LOG, "--run", str(run8), "--title", "Test iteration", "--goal", "G", "--vault", str(vault), "--parent", "earlier-run"]
+subprocess.run(cmd8, check=True, capture_output=True)
+base = vault / "binder-design"
+notes = list((base / "iterations").glob("*.md"))
+assert len(notes) == 1, notes
+text = notes[0].read_text(encoding="utf-8")
+assert "type: design-iteration" in text and "status: draft" in text and "n_designs: 3" in text and "n_pass: 1" in text, text[:400]
+assert 'parent: "[[earlier-run]]"' in text and "abc1234" in text and "TODO" in text and "sha256" in text
+slug = notes[0].stem
+assert (base / "designs" / f"{slug}--rfd4_0.md").exists() and not (base / "designs" / f"{slug}--rfd4_1.md").exists(), "only the passing design gets a note"
+assert (base / "data" / f"{slug}-results.csv").exists() and f"[[{slug}]]" in (base / "iterations.md").read_text(encoding="utf-8")
+assert sorted(p.name for p in vault.iterdir()) == ["binder-design"], "nothing may be written outside binder-design/"
+notes[0].write_text(text + "\nMY EDIT\n", encoding="utf-8")
+subprocess.run(cmd8, check=True, capture_output=True)                         # run again: the edited note must survive
+assert "MY EDIT" in notes[0].read_text(encoding="utf-8"), "an existing note must never be overwritten"
+print("Test 8 passed: iteration notes (properties, passing-design note, results copy, index) are made and never overwrite edits")
 print("\nALL TESTS PASSED")

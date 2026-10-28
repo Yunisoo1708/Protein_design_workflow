@@ -512,6 +512,30 @@ def read_csv(path):
         return list(csv.DictReader(f))
 
 
+def write_run_info(S, out, stages):
+    """Record how this output folder was made, in <out>/run_info.json: one entry per invocation (time, stages, code version,
+    plain settings values). log_iteration.py reads it so a result note can say exactly where its numbers came from.
+    Commands, environments and paths of tools are left out; only short plain values are kept."""
+    import datetime
+    import sys
+    try:
+        commit = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "describe", "--always", "--dirty"],
+                                capture_output=True, text=True, timeout=10).stdout.strip() or None
+    except Exception:
+        commit = None
+    keep = {k: v for k, v in S.items() if isinstance(v, (int, float, bool)) or (isinstance(v, str) and len(v) < 120 and not k.endswith(("_cmd", "_dir", "_bin", "_python", "_cif")))}
+    keep["target_pdb"] = Path(str(S.get("target_pdb", ""))).name
+    keep["af3_target_template"] = bool(S.get("af3_target_template_cif"))
+    entry = {"time": datetime.datetime.now().isoformat(timespec="seconds"), "stages": stages, "code_version": commit, "argv": sys.argv[1:], "settings": keep}
+    p = out / "run_info.json"
+    try:
+        info = json.loads(p.read_text())
+    except Exception:
+        info = {"invocations": []}
+    info["invocations"].append(entry)
+    p.write_text(json.dumps(info, indent=1))
+
+
 def main():
     ap = argparse.ArgumentParser(description="RFdiffusion -> ProteinMPNN -> AlphaFold2 (Bennett initial guess) binder design")
     ap.add_argument("--settings", default=str(Path(__file__).with_name("settings.py")))
@@ -526,6 +550,7 @@ def main():
     out = Path(args.output_dir or S["output_dir"]).resolve()
     out.mkdir(parents=True, exist_ok=True)
     stages = (args.stages or S.get("stages") or "rfd,mpnn,af2,score_af2").split(",")
+    write_run_info(S, out, stages)
 
     if "rfd" in stages:
         print("\n[1/4] RFdiffusion: designing backbones")
