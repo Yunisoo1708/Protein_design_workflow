@@ -2,13 +2,16 @@
 rfd4_to_af3_jobs.py -- turn RFD4 binder designs into the folder layout design_pipeline.py's AF3 stages expect.
 
 RFD4 writes, per design, a CIF with the target pieces first (chains A, B, ...) and the designed binder LAST. This script:
-  * joins the target chains into one 132-residue chain "A" and calls the binder chain "B"  (a backbone PDB per design,
+  * joins the target chains into one chain "A" and calls the binder chain "B"  (a backbone PDB per design,
     used by the scorer for the binder-RMSD)
   * checks that the target really came out unchanged (sequence identical to --target_seq, else it refuses)
+  * names each job <prefix>_<last number of its sample folder> and stops if two designs would get the same name
   * writes <out>/1_rfdiffusion/<job>.pdb  and  <out>/2_mpnn/sequences.csv   (same columns the pipeline already reads)
 
-    python rfd4_to_af3_jobs.py --rfd4_samples runs/batch50/inference_samples --out ~/run_RFD4_5YXH \
-        --target_seq SVGKSS...   [--prefix rfd4]
+    python rfd4_to_af3_jobs.py --rfd4_samples <rfd4 out_dir>/inference_samples --out <output_dir> \
+        --target_seq "$(cat work/rfd4_target_seq.txt)"   [--prefix rfd4]
+
+./setup.sh run-rfd4 runs this for you; work/rfd4_target_seq.txt is written by make_rfd4_input.py.
 
 Run with a Python that has gemmi (the RFD4 environment does). The "mpnn_score" column does not exist for RFD4 (it designs
 sequence and structure together) and is filled with "NA".

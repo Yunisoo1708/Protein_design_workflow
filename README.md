@@ -1,73 +1,46 @@
-# Binder design: RFdiffusion → ProteinMPNN → AlphaFold2 (Bennett "initial guess") or AlphaFold 3
+# Binder design: RFdiffusion / RFD4 → AlphaFold 2 or AlphaFold 3
 
-The main route checks designs with AF2. The `af3-local` branch adds a local **AlphaFold 3** check (iPTM, optional target template, several diffusion samples) and an **RFD4** route that designs backbone and sequence together (folder `rfd4/`).
+Designs protein binders for a target and checks them by predicting the complex again. Three routes share one settings file:
+
+| `ROUTE` | Designs | Checked with | Gives |
+|---|---|---|---|
+| `af2` | RFdiffusion → ProteinMPNN | AlphaFold2 "initial guess" (Bennett lab) | `results_af2.csv`: `pae_interaction`, `plddt_binder`, `rmsd_binder` (AF2 has no iPTM) |
+| `af3` | RFdiffusion → ProteinMPNN | local AlphaFold 3, optional target template | `results_af3.csv`: also `iptm` |
+| `rfd4_af3` (default) | RFD4 (backbone + sequence together) | local AlphaFold 3 with the target template, 5 samples | `results_af3.csv` |
 
 ```
-target.pdb ─► [1 RFdiffusion] ─► backbones ─► [2 ProteinMPNN] ─► sequences ─► [3 AF2 initial guess] ─► [4 Score] ─► results_af2.csv
-              draw skeletons                  write sequences                 predict binder+target    pAE_interaction, pLDDT, RMSD
+./setup.sh                  # what is installed, what to run next (changes nothing)
+./setup.sh af3              # AF2 machine -> add AlphaFold 3
+./setup.sh rfd4             # add RFD4
+./setup.sh example          # make the two CIF files the models read (work/)
+./setup.sh run-rfd4 --n 50  # RFD4 generate -> convert -> AF3 check -> report   (add --search for reward-guided search)
+ROUTE=af2 python design_pipeline.py      # the original AF2 route, unchanged
 ```
+`./setup.sh <step> --dry-run` prints the commands without running them. Read [GUIDE.md](GUIDE.md) for how to change things.
 
-New here? Read [GUIDE.md](GUIDE.md): the run command, a map of the code, and a "how do I change X" cheat sheet.
+## Files
+| File | Role |
+|---|---|
+| `setup.sh` | install / check / run: the one script for switching a machine from AF2 to AF3 and RFD4 |
+| `settings.py` | the one settings file: target, routes, tool paths, thresholds |
+| `design_pipeline.py` | the pipeline stages (`rfd`, `mpnn`, `af2`, `score_af2`, `af3`, `score_af3`, optional AlphaFold Server stages) |
+| `make_af3_template.py`, `make_rfd4_input.py` | write the **CIF files** AF3 (target template) and RFD4 (input + task spec) read from the target PDB |
+| `rfd4_to_af3_jobs.py`, `rfd4_af3_report.py` | convert RFD4 designs for the AF3 stage (refuses a design whose target changed) / summarise the check |
+| `rfd4/` | reward-guided search config, the Apptainer stand-in (`shim/`), `select_best.py`; see `rfd4/README.md` |
+| `prepared_protein_structure/5YXH.pdb` | the example target |
+| `tests/` | `python tests/test_workflow.py` runs the pipeline with fake tools (no GPU); it checks plumbing and score maths, not design quality |
 
-## Use it
-1. Install the tools (once): RFdiffusion, ProteinMPNN and [dl_binder_design](https://github.com/nrbennet/dl_binder_design) (needs PyRosetta and the public AF2 `params_model_1_ptm` weights). The pipeline script itself needs only `pip install numpy biopython`.
-2. Edit `settings.py` (target file, hotspots, tool paths).
-3. Run inside WSL/Linux: `python design_pipeline.py`
-4. Open `runs/run1/results_af2.csv` (best design first).
-
-## Output columns
+## What the numbers mean
 | column | meaning | good |
 |---|---|---|
-| `pae_interaction` | AF2's expected error in the binder's position relative to the target (lower is better) | < 10 |
-| `plddt_binder` | AF2 confidence in the binder's fold (0–100, mean over the binder) | > 80 |
-| `rmsd_binder` | Å between the AF2 binder and the RFdiffusion/ProteinMPNN backbone, both complexes lined up on the target | < 2 |
+| `iptm` | AF3's confidence in the binder–target interface (AF3 routes) | ≥ 0.8 |
+| `pae_interaction` | expected error (Å) in the binder's position relative to the target | < 10 |
+| `plddt_binder` | confidence in the binder's own fold (0–100) | > 80 |
+| `rmsd_binder` | Å between the predicted binder and the designed one, complexes lined up on the target | < 2 |
 
-`rmsd_binder` is the "does AF2 agree with what I designed?" check. ProteinMPNN only writes sequences, so its "structure" is the RFdiffusion backbone it was given. The AF2 model has **no iPTM**; for that, use the optional AlphaFold Server route below.
+Passing means the design is self-consistent in silico, not that it binds in the lab. AF2 and AF3 are different predictors, so their numbers are not interchangeable. AF3 needs a GPU with compute capability ≥ 8.0 and the model parameters (`af3.bin.zst`, which you obtain from DeepMind under their terms; the Pairformer is part of that file).
 
-## Folders it creates
-`1_rfdiffusion/` backbones · `2_mpnn/` sequences (`sequences.csv`) · `3_af2_inputs/` · `3_af2_outputs/` (one `w0`, `w1`… folder per worker) · `results_af2.csv`
-
-## Optional: iPTM from AlphaFold Server (website)
-The only route that gives iPTM, and it needs nothing installed:
-1. `--stages rfd,mpnn,afs_export` writes `afserver_jobs.json`.
-2. Upload it at alphafoldserver.com (Upload JSON; needs a Google login; the site has a daily job limit, so send only your best designs) and download the result `.zip` files into one folder.
-3. `--stages afs_import,score_afs --afserver_zips <that folder>` gives `results_afserver.csv` with `iptm`, `plddt_binder`, `rmsd_binder`.
-
-## Local AlphaFold 3 (`af3`, `score_af3` stages)
-Gives `iptm` without a website or a daily limit. Needs the AF3 code in its own conda env, the AF3 model parameters (`af3.bin.zst`, obtained from DeepMind under their terms) and a GPU with compute capability 8.0+. No sequence databases are used (single-sequence mode).
-`python design_pipeline.py --settings settings_server_af3.py --stages af3,score_af3` writes `results_af3.csv` (`iptm`, `pae_interaction`, `plddt_binder`, `rmsd_binder`).
-Two settings matter most: `af3_diffusion_samples` (several predictions per design; a stable prediction agrees across them) and `af3_target_template_cif` (the target's own structure as a template, made with `make_af3_template.py`). Without a template AF3 often cannot fold a small domain target on its own, and `rmsd_binder` is then meaningless.
-Measured on one RTX 5060 Ti: 250 predictions (50 designs x 5 samples) take about 20 minutes. AF3 is a different predictor from AF2, so its numbers are not interchangeable with `results_af2.csv`.
-
-## RFD4 route (`rfd4/`)
-RFD4 (RFD4-Proteina) designs backbone and sequence together, so ProteinMPNN is not used. `rfd4/README.md` explains the whole chain: generate, convert (`rfd4_to_af3_jobs.py`), AF3 check, report (`rfd4_af3_report.py`), plus optional reward-guided search and partial re-noising around a good design.
-
-## GPU server notes (`settings_server.py`, `settings_server_large.py`)
-- RTX 5060 Ti (new) runs RFdiffusion and AF2; GTX 1660 SUPER (old) can run ProteinMPNN. Pick a card per tool with `*_env: {"CUDA_VISIBLE_DEVICES": "0"}`.
-- RFdiffusion on the 5060 Ti uses a small PyTorch-only stand-in for DGL (`~/tools/dgl_shim` on the server), because DGL has no kernels for that card.
-- AF2 recompiles for every new input length (slow, CPU-bound, GPU idle). Use a fixed `binder_length` such as `"55-55"` and keep the JAX compile cache setting.
-
-## Using several GPUs at once
-Give a tool a list of *workers* (a command + the GPU it runs on + a `weight` = relative speed) and the work is
-shared between them, running at the same time. See `settings_server_parallel.py`. Measured on the server
-(50 backbones x 4 sequences): RFdiffusion 31 min on both cards, ProteinMPNN 2.5 min, AF2 51 min.
-AF2 is limited by the CPU (about 16 s of every 20 s per prediction is PyRosetta / TensorFlow / file writing on one
-core), not the GPU, so the way to speed it up is *more workers per card*, not a faster card. Measured: 200 AF2
-predictions took 51 min with 1 worker per card and **20.6 min with 4 workers on the 5060 Ti + 2 on the 1660 SUPER**
-(`real_run/timing_af2_6workers.txt`). AF2 is not exactly repeatable: the two runs gave the same scores to ~0.1
-(median), but 5 of 200 designs flipped pass/fail, mostly designs sitting right on the RMSD limit.
-`--output_dir` re-runs a stage into a different folder without touching earlier results.
-
-**How many workers per GPU?** Add `"copies": N` to a worker to run N identical workers on one card (JAX's
-memory grab is switched off automatically). The easy way is the `WORKERS_PER_GPU` block at the top of
-`settings_server_parallel.py` (two cards) or `settings_big_gpu.py` (one big card, e.g. L40S / H200; numbers can
-also be set per run, e.g. `AF2_WORKERS=16 python design_pipeline.py --settings settings_big_gpu.py ...`).
-The defaults for the big card are untested starting guesses: time 4, 8 and 16 AF2 workers and keep the fastest.
-
-## Tips
-- Re-run one step only: `--stages score_af2` (options: `rfd`, `mpnn`, `af2`, `score_af2`). Re-scoring needs no GPU, so you can try new pass limits in seconds.
-- Use a new `output_dir` for every run; old files in a reused folder get mixed into the new results.
-- Start small (`num_backbones: 10`) and look at the table before scaling up.
-
-## Test it (no GPU, no tools needed)
-`python tests/test_workflow.py` runs the whole pipeline with fake tools (`tests/fake_tools.py`) that copy the real tools' command lines and output formats. It checks the commands, file parsing, the multi-worker splitting and the pAE/iPTM/pLDDT/RMSD maths. It does **not** judge design quality.
+## Honest notes
+- **AF3 as both guide and judge.** In reward-guided search the AF3 oracle steers generation and the final check is AF3 as well, so they are not independent. OpenFold3 would be a more independent guide, but it needs RFD4's patched AF3 build and converted weights that this repo does not install (`./setup.sh openfold3` reports what is missing).
+- **The template matters.** AF3 cannot fold the small 5YXH target alone (≈16 Å error without the template, ≈1.2 Å with it), so `rmsd_binder` without a template is not meaningful.
+- **Example result (5YXH, one run each, AF3 + template, 5 samples):** plain RFD4 0/50 pass; RFD4 with an AF3-pLDDT beam search 1/50; 51 partial re-noising variants around that passing design 11/51 (near copies of one parent, so correlated). One design reproduced across 20 seeds (97/100 samples with iPTM ≥ 0.8 and RMSD ≤ 2 Å) and fell apart without the template.

@@ -4,8 +4,8 @@ rfd4_af3_report.py -- summarise an AF3 check of RFD4 binder designs (the folder 
 Prints how many designs pass, the iPTM / pAE / pLDDT spread, how many AF3 binders touch the hotspot residues, and a table of the
 best designs with the iPTM of each diffusion sample (a design whose samples all agree is a stable prediction).
 
-    python rfd4_af3_report.py --run ~/run_RFD4_5YXH
-    python rfd4_af3_report.py --run ~/run_RFD4S_5YXH --top 20 --hotspots 31,32,122,123 --target_ranges 16-108,113-151
+    python rfd4_af3_report.py --run <output_dir>
+    python rfd4_af3_report.py --run <output_dir> --top 20 --hotspots 31,32,122,123 --target_ranges 16-108,113-151
 
 Needs gemmi and numpy (the RFD4 environment has both). "hot_d" is the smallest heavy-atom distance in AF3's own model between the
 binder and the hotspot residues; <= 4.5 A counts as touching. The 5YXH numbers are the defaults, so pass --hotspots and

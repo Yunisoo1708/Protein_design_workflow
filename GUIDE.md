@@ -1,130 +1,67 @@
 # Guide: how to run and modify this workflow
 
-The workflow designs protein binders in four steps:
-
 ```
-target.pdb -> [1 RFdiffusion] -> [2 ProteinMPNN] -> [3 AF2 initial guess (Bennett)] -> [4 score] -> results_af2.csv
-              draw backbones     write sequences      predict binder + target          pAE_interaction, pLDDT, RMSD
+RFdiffusion route:  target.pdb → [rfd] backbones → [mpnn] sequences → [af2 | af3] predict binder + target → [score] → results_af2.csv | results_af3.csv
+RFD4 route:         target.pdb → make_rfd4_input.py (CIF + spec) → rfd4-generate → rfd4_to_af3_jobs.py → [af3] → [score_af3] → report
 ```
+Almost every change needs **only `settings.py`**, not code.
 
-Most changes need **only a settings file**, not the code.
-
-## 1. The run command
-
+## 1. Run it
 ```bash
-python design_pipeline.py --settings <settings file> --stages <steps>
+./setup.sh                     # status of every component and the next step
+ROUTE=af2 python design_pipeline.py              # RFdiffusion + MPNN + AF2   (use a Python with numpy and biopython)
+ROUTE=af3 python design_pipeline.py              # RFdiffusion + MPNN + AF3
+./setup.sh run-rfd4 --n 50                       # RFD4 + AF3 (add --search for reward-guided search)
 ```
-
-| Option | Meaning |
+| `design_pipeline.py` option | Meaning |
 |---|---|
-| `--settings` | which settings file to use (default: `settings.py` next to the script) |
-| `--stages` | comma-separated steps to run (default: `rfd,mpnn,af2,score_af2`) |
-| `--output_dir` | write to this folder instead of the one in the settings file |
-| `--afserver_zips` | folder of `fold_*.zip` files downloaded from alphafoldserver.com (only for `afs_import`) |
+| `--settings` | another settings file (default `settings.py`) |
+| `--stages` | steps to run, comma separated (default: the `stages` of the chosen `ROUTE`) |
+| `--output_dir` | write here instead of `output_dir` from the settings (also `OUTPUT_DIR=...`) |
+| `--afserver_zips` | folder of `fold_*.zip` downloaded from alphafoldserver.com (only for `afs_import`) |
 
-Stage names: `rfd`, `mpnn`, `af2`, `score_af2` (main route) - `afs_export`, `afs_import`, `score_afs` (optional AlphaFold Server route) - `af3`, `score_af3` (local AlphaFold 3, branch `af3-local`).
+Stages: `rfd`, `mpnn`, `af2`, `score_af2` · `af3`, `score_af3` · `afs_export`, `afs_import`, `score_afs` (optional AlphaFold Server website route, the only one with iPTM besides AF3).
+Re-scoring needs no GPU, so new pass limits can be tried in seconds: `python design_pipeline.py --output_dir <finished run> --stages score_af3`.
 
-### The three ways to check designs (step 3)
-| Route | Command | Gives |
-|---|---|---|
-| AF2 "initial guess" (Bennett lab), the main route | `--stages rfd,mpnn,af2,score_af2` | `results_af2.csv`: pAE_interaction (instead of iPTM), pLDDT, RMSD |
-| Local AlphaFold 3 (needs the `af3` env + parameters, see `settings_server_af3.py`) | `--settings settings_server_af3.py --stages af3,score_af3` | `results_af3.csv`: iPTM, pAE_interaction, pLDDT, RMSD; several samples per design and an optional target template |
-| AlphaFold Server (website), optional, the only route with iPTM | `--stages rfd,mpnn,afs_export`, upload `afserver_jobs.json` at alphafoldserver.com, download the zips, then `--stages afs_import,score_afs --afserver_zips <folder>` | `results_afserver.csv`: iPTM, pLDDT, RMSD |
+## 2. The CIF files (`./setup.sh example`)
+The models read **CIF**, not your PDB. Two small scripts write them from the PDB in `settings.py` and put them in `work/` (git-ignored):
+- `make_af3_template.py` → `work/target_template.cif`: the target alone, as an AF3 *template*. AF3 is told what the target looks like and only has to place the binder.
+- `make_rfd4_input.py` → `work/rfd4_input.cif`, `rfd4_spec.yaml`, `rfd4_target_seq.txt`: one chain per unbroken target piece, the spec that fixes the target's coordinates and sequence, and the sequence the converter checks against. `--check` loads the spec like RFD4 does and stops if the target is not fully fixed.
 
-### Example (GPU server, AF2 route)
-```bash
-cd ~/workflows/Protein_design_workflow
-~/miniconda3/envs/rfd_bw/bin/python design_pipeline.py --settings settings_server_parallel.py --stages rfd,mpnn,af2,score_af2
-```
-
-### A small trial first
-Make a tiny settings file (4 backbones x 2 sequences) that reuses a bigger one:
-```python
-import runpy
-from pathlib import Path
-S = runpy.run_path(str(Path.home() / "workflows/Protein_design_workflow/settings_server_parallel.py"))["SETTINGS"]
-S.update({"num_backbones": 4, "seqs_per_backbone": 2, "output_dir": str(Path.home() / "trial_run")})
-SETTINGS = S
-```
-Save it outside the git folder (for example `~/scripts/settings_trial.py`) and pass it with `--settings`. Expect a few minutes.
-
-### Self-test (no GPU needed, a few seconds)
-```bash
-python tests/test_workflow.py
-```
-It uses pretend tools to check the plumbing and the score maths. It cannot judge design quality.
-
-## 2. Gotchas that cost time
-- **Use a Python that has numpy and Biopython** to run `design_pipeline.py`. A plain conda `(base)` environment often lacks Biopython (`No module named 'Bio'`). On the GPU server use the `rfd_bw` environment.
-- **The tool Pythons are separate.** The settings file points each tool (RFdiffusion, ProteinMPNN, AF2) at the Python of its own conda environment, as a **full path** ending in `/bin/python`. `~` is not expanded there; write `/home/<user>/...` or build the path with `Path.home()`.
-- **Use a fresh `output_dir` for every run.** Re-running into an old folder leaves old files behind, and ProteinMPNN reads every `design_*.pdb` in `1_rfdiffusion/`, including stale ones.
-- **Linux paths are case sensitive**: `Protein_design_workflow` and `protein_design_workflow` are different folders.
-- **GPU numbers** come from `nvidia-smi`. On the WSL server it is not on PATH: use `/usr/lib/wsl/lib/nvidia-smi`.
-- **AF2 is limited by the CPU**, not the GPU (about 16 of every 20 s per prediction runs on one CPU core). Use several workers per card (see below) and a fixed `binder_length` (for example `"55-55"`) so JAX compiles only once.
-
-## 3. Files
-| File | Role | Edit it? |
-|---|---|---|
-| `design_pipeline.py` | the workflow (all steps) | rarely |
-| `settings_server_parallel.py` | two-GPU server; `WORKERS_PER_GPU` at the top | often |
-| `settings_big_gpu.py` | one big GPU (L40S / H200); worker counts can be set per run, e.g. `AF2_WORKERS=16` | often |
-| `settings.py` | beginner template for one GPU (AF2 route) | yes, to start |
-| `settings_server.py`, `settings_server_large.py` | base / older server settings the others build on | rarely |
-| `settings_server_af3.py` | local AlphaFold 3 settings (env, parameters, samples, optional target template) | yes, for AF3 |
-| `settings_server_af3_5YXH.py`, `settings_rfd4_af3_5YXH.py` | worked examples for target 5YXH (AF3 on RFdiffusion+MPNN designs; AF3 on RFD4 designs) | copy and adapt |
-| `make_af3_template.py` | cuts the target out of a PDB as an AF3 template mmCIF | when using a template |
-| `rfd4_to_af3_jobs.py`, `rfd4_af3_report.py` | convert RFD4 designs for the AF3 stages / summarise the AF3 check | see `rfd4/README.md` |
-| `rfd4/` | RFD4 route: task specs, reward-guided search, partial re-noising, native-AF3 shim, example results | see `rfd4/README.md` |
-| `prepared_protein_structure/` | the example target (5YXH) and its AF3 template | read only |
-| `tests/` | `test_workflow.py` (run it), `fake_tools.py` (pretend tools), `settings_test.py` | run, do not edit |
-| `real_run/` | example results and timings copied here by hand; the pipeline never writes to it | read only |
+## 3. Gotchas that cost time
+- **Fresh `output_dir` for every run.** Old files in a reused folder get mixed into new results (ProteinMPNN reads every `design_*.pdb`).
+- **Tool Pythons are separate.** Each tool points at the Python of its own conda env as a **full path** ending in `/bin/python`; `~` is not expanded.
+- **Job names must be unique.** `rfd4_to_af3_jobs.py` names a job after the number at the end of its sample folder and now stops on duplicates (an earlier run silently collapsed 50 designs onto 4 names).
+- **AF3 on an old second GPU:** AF3 needs compute capability ≥ 8.0; `af3_env` hides the other card with `CUDA_VISIBLE_DEVICES`.
+- **AF2 is CPU-bound** (about 16 of every 20 s per prediction on one core): use several workers per card (see the commented `af2_workers` example in `settings.py`; measured 2.5× faster with 4 workers) and a fixed `binder_length` so JAX compiles once. AF2 is not exactly repeatable: designs sitting on a limit can flip pass/fail.
+- **WSL:** `nvidia-smi` is `/usr/lib/wsl/lib/nvidia-smi`. Linux paths are case sensitive.
 
 ## 4. Reading `design_pipeline.py`
-Open `main()` first: it is the table of contents and runs the stages in order. Then jump to a step. In VS Code, **Ctrl+Shift+O** lists all functions, **Ctrl+G** goes to a line, **F12** jumps to a definition.
+Open `main()` first; it runs the stages in order. In VS Code, **Ctrl+Shift+O** lists functions.
 
 | Part | Function(s) |
 |---|---|
 | Run commands, GPU workers | `run`, `workers_for`, `split_by_weight`, `run_parallel` |
 | Read structures | `read_chains`, `find_binder_and_target` |
-| Step 1: RFdiffusion | `step1_rfdiffusion` |
-| Step 2: ProteinMPNN | `step2_mpnn`, `design_sequences`, `read_mpnn_fasta` |
-| Step 3: AF2 (main route) | `step3_af2`, `make_af2_pdb`, `read_af2_scores` |
-| Step 3: AlphaFold Server (optional) | `step3_afserver_export`, `step3_afserver_import`, `afs_files` |
-| Step 4: scoring (AF2) | `score_job_af2`, `step4_score_af2` |
-| Step 4: scoring (AlphaFold Server) | `score_job_afs`, `step4_score_afs` |
+| RFdiffusion / ProteinMPNN | `step1_rfdiffusion`, `step2_mpnn`, `design_sequences`, `read_mpnn_fasta` |
+| AF2 | `step3_af2`, `make_af2_pdb`, `read_af2_scores`, `score_job_af2`, `step4_score_af2` |
+| AF3 | `step3_af3`, `score_job_afs` (shared with AlphaFold Server), `step4_score_afs` |
+| AlphaFold Server | `step3_afserver_export`, `step3_afserver_import`, `afs_files` |
 | RMSD maths | `make_fitter`, `rmsd` |
 
-## 5. "I want to change..." cheat sheet
+## 5. "I want to change…"
 | Change | Where |
 |---|---|
-| target file, residues, hotspots, binder length | settings: `target_pdb`, `target_range`, `hotspots`, `binder_length` |
-| number of designs | settings: `num_backbones`, `seqs_per_backbone` |
-| workers per GPU | `WORKERS_PER_GPU` at the top of the settings file (or `"copies": N` on a worker) |
-| what counts as a pass | settings: `min_plddt`, `max_rmsd`, `max_pae_interaction`, `min_iptm` |
-| AF2 effort | settings: `af2_recycles` |
-| more varied sequences | the `"--sampling_temp", "0.1"` line in `design_sequences` (try 0.2-0.3) |
-| ranking of the table | the `rows.sort(...)` lines in `step4_score_af2` / `step4_score_afs` |
-| the pass rule itself | the `ok = ...` lines in `step4_score_af2` / `step4_score_afs` |
-| a new result column | add it to the dictionary returned by `score_job_af2` / `score_job_afs` |
-
-Output folders inside `output_dir`: `1_rfdiffusion/` (backbones), `2_mpnn/sequences.csv`, `3_af2_inputs/` and `3_af2_outputs/` (one `w0`, `w1`... folder per worker), and finally `results_af2.csv` (the AlphaFold Server route uses `3_afserver_outputs/` and `results_afserver.csv`).
+| target, residues, hotspots, binder length | `settings.py`: the TARGET block |
+| route (AF2 / AF3 / RFD4) | `ROUTE` in `settings.py` or the environment |
+| number of designs | `num_backbones`, `seqs_per_backbone` (RFdiffusion); `rfd4_num_designs` or `--n` (RFD4) |
+| predictions per design in AF3 | `af3_diffusion_samples` |
+| what counts as a pass | `min_iptm`, `min_plddt`, `max_rmsd`, `max_pae_interaction`; the rule itself is the `ok = ...` line in `step4_score_*` |
+| reward-guided search (beam width, branches, when to score, which metric) | `rfd4/hydra/inference_experiment/search.yaml` |
+| more varied ProteinMPNN sequences | the `"--sampling_temp", "0.1"` line in `design_sequences` (try 0.2–0.3) |
+| a new result column | the dictionary returned by `score_job_af2` / `score_job_afs` |
 
 ## 6. Safe editing habits
-1. Change one thing at a time.
-2. Run the self-test after code edits.
-3. Try new pass thresholds without re-running anything (seconds, no GPU):
-   ```bash
-   python design_pipeline.py --settings settings_server_parallel.py --output_dir <finished run folder> --stages score_af2
-   ```
-4. `git diff` shows what you changed; `git checkout -- <file>` undoes an edit you have not committed.
-
-## 7. Moving files between computers
-The server's `100.x` address is reachable only from WSL on the laptop, not from PowerShell.
-```bash
-scp <file> <user>@<server-ip>:~/workflows/Protein_design_workflow/      # laptop -> server
-scp <user>@<server-ip>:~/trial_run/results_af2.csv .                    # server -> laptop
-```
-From PowerShell, put `wsl` in front, and write `C:\Research` as `/mnt/c/Research`.
-
-## 8. Reading the results
-`pae_interaction` (lower is better, below 10 is good) - `plddt_binder` (above 80) - `rmsd_binder` in angstrom (below 2). AF2 is not exactly repeatable: designs that sit right on a limit can flip between runs, so trust designs that pass comfortably. Passing means the design is self-consistent in silico, not that it binds in the lab.
+1. Change one thing at a time and run `python tests/test_workflow.py` after code edits.
+2. `git diff` shows what changed; `git checkout -- <file>` undoes an uncommitted edit.
+3. Copy files between machines through WSL (`scp`); the server's `100.x` address is not reachable from PowerShell.

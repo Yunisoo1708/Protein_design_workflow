@@ -20,17 +20,20 @@ Final table (results_af2.csv) has, for every designed sequence:
 AF2 has no iPTM. If you want one, the optional AlphaFold Server route (alphafoldserver.com, a website) gives
 iPTM, pLDDT and RMSD: see --stages afs_export / afs_import / score_afs below.
 
-How to run (inside WSL / Linux, where the tools live):
-  python design_pipeline.py                         # all four steps, uses settings.py
+How to run (inside WSL / Linux, where the tools live). Everything is set in settings.py; its ROUTE picks the checker
+(af2, af3, rfd4_af3) and the default stages:
+  python design_pipeline.py                         # the stages of the chosen ROUTE, uses settings.py
+  ROUTE=af2 python design_pipeline.py               # the same file, AF2 route (ROUTE=af3 for RFdiffusion+MPNN+AF3)
   python design_pipeline.py --settings my_set.py    # use another settings file
   python design_pipeline.py --stages score_af2      # re-run only some steps (rfd, mpnn, af2, score_af2)
   python design_pipeline.py --stages rfd,mpnn,afs_export   # then upload afserver_jobs.json to alphafoldserver.com
   python design_pipeline.py --stages afs_import,score_afs --afserver_zips <folder of downloaded zips>
 
-Local AlphaFold 3 (needs the "af3" conda env, the AF3 model parameters and a settings file with the af3_* keys,
-see settings_server_af3.py). It gives iPTM, pLDDT, RMSD and pae_interaction, with no daily limit:
-  python design_pipeline.py --settings settings_server_af3.py --stages af3,score_af3
-  python design_pipeline.py --settings settings_server_af3.py --stages rfd,mpnn,af3,score_af3   # the whole chain
+Local AlphaFold 3 (needs the "af3" conda env and the AF3 model parameters: ./setup.sh af3; the af3_* keys are in
+settings.py). It gives iPTM, pLDDT, RMSD and pae_interaction, with no daily limit:
+  ROUTE=af3 python design_pipeline.py                      # RFdiffusion -> ProteinMPNN -> AF3, the whole chain
+  python design_pipeline.py --stages af3,score_af3         # only the AF3 check of designs already in the output folder
+Designs from RFD4 are generated and converted by ./setup.sh run-rfd4 (see README.md).
 Useful AF3 settings keys: af3_diffusion_samples (predictions per design), af3_target_template_cif (a single-chain mmCIF of
 the target, made with make_af3_template.py; it is attached to the target chain so AF3 only has to place the binder).
 Results go to results_af3.csv (iptm, pae_interaction, plddt_binder, rmsd_binder, pass).
@@ -512,8 +515,9 @@ def read_csv(path):
 def main():
     ap = argparse.ArgumentParser(description="RFdiffusion -> ProteinMPNN -> AlphaFold2 (Bennett initial guess) binder design")
     ap.add_argument("--settings", default=str(Path(__file__).with_name("settings.py")))
-    ap.add_argument("--stages", default="rfd,mpnn,af2,score_af2",
-                    help="comma list of: rfd,mpnn,af2,score_af2  |  optional AlphaFold Server route: afs_export,afs_import,score_afs")
+    ap.add_argument("--stages", default=None,
+                    help="comma list of: rfd,mpnn,af2,score_af2  |  af3,score_af3  |  optional AlphaFold Server route: "
+                         "afs_export,afs_import,score_afs   (default: the 'stages' value in the settings file, else rfd,mpnn,af2,score_af2)")
     ap.add_argument("--afserver_zips", help="folder with fold_*.zip downloaded from alphafoldserver.com")
     ap.add_argument("--output_dir", help="use this folder instead of the one in the settings file")
     args = ap.parse_args()
@@ -521,7 +525,7 @@ def main():
     S = runpy.run_path(args.settings)["SETTINGS"]           # load the settings dictionary
     out = Path(args.output_dir or S["output_dir"]).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    stages = args.stages.split(",")
+    stages = (args.stages or S.get("stages") or "rfd,mpnn,af2,score_af2").split(",")
 
     if "rfd" in stages:
         print("\n[1/4] RFdiffusion: designing backbones")
