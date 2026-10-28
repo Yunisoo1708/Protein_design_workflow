@@ -88,6 +88,9 @@ SETTINGS = {
     # best candidates continue. Needs the apptainer shim (./setup.sh shim). Set the oracle's weights here:
     "rfd4_oracle_model_dir": str(HOME / "af3_models"),   # AF3 weights; converted OpenFold3 weights would go here (see ./setup.sh openfold3)
 
+    # ---- Obsidian vault queue: runs started with --log leave their result notes here; vault_pull.sh (on the laptop) copies them -------
+    "vault_outbox": str(HOME / "vault_outbox"),
+
     # ---- what counts as a good design (rules of thumb) ----------------------------------------------------------------
     "max_pae_interaction": 10,     # lower is better
     "min_plddt": 80,

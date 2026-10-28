@@ -26,7 +26,7 @@ ROUTE=af2 python design_pipeline.py      # the original AF2 route, unchanged
 | `design_pipeline.py` | the pipeline stages (`rfd`, `mpnn`, `af2`, `score_af2`, `af3`, `score_af3`, optional AlphaFold Server stages) |
 | `make_af3_template.py`, `make_rfd4_input.py` | write the **CIF files** AF3 (target template) and RFD4 (input + task spec) read from the target PDB |
 | `rfd4_to_af3_jobs.py`, `rfd4_af3_report.py` | convert RFD4 designs for the AF3 stage (refuses a design whose target changed) / summarise the check |
-| `log_iteration.py`, `AGENTS.md` | turn a finished run into notes for the Obsidian vault (`binder-design/`: one note per iteration, one per passing design, the results table, an overview), and the rule that every iteration is logged before the next starts |
+| `log_iteration.py`, `vault_pull.sh`, `AGENTS.md` | result notes for the Obsidian vault (`binder-design/`: one note per iteration, one per passing design, the results table, an overview). A run started with `--log` queues them when it ends; `vault_pull.sh`, scheduled on the laptop, copies them into the vault. You write the interpretation; `AGENTS.md` is the rule set for agents |
 | `rfd4/` | reward-guided search config, the Apptainer stand-in (`shim/`), `select_best.py`; see `rfd4/README.md` |
 | `prepared_protein_structure/5YXH.pdb` | the example target |
 | `tests/` | `python tests/test_workflow.py` runs the pipeline with fake tools (no GPU); it checks plumbing and score maths, not design quality |

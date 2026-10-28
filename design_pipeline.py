@@ -45,6 +45,7 @@ import os
 import re
 import runpy
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -544,6 +545,11 @@ def main():
                          "afs_export,afs_import,score_afs   (default: the 'stages' value in the settings file, else rfd,mpnn,af2,score_af2)")
     ap.add_argument("--afserver_zips", help="folder with fold_*.zip downloaded from alphafoldserver.com")
     ap.add_argument("--output_dir", help="use this folder instead of the one in the settings file")
+    ap.add_argument("--log", action="store_true",
+                    help="when the run ends, queue its result notes for the Obsidian vault puller (settings 'vault_outbox'); only runs started with --log are ever pulled")
+    ap.add_argument("--title", help="with --log: title of the iteration note")
+    ap.add_argument("--goal", help="with --log: the question this iteration answers")
+    ap.add_argument("--parent", help="with --log: slug of the iteration this one follows from")
     args = ap.parse_args()
 
     S = runpy.run_path(args.settings)["SETTINGS"]           # load the settings dictionary
@@ -580,6 +586,17 @@ def main():
     if "score_af3" in stages:
         print("\n[4/4] Scoring (local AlphaFold 3)")
         step4_score_afs(S, jobs, out, csv_name="results_af3.csv", use_pae=True)
+
+    if args.log and {"score_af2", "score_afs", "score_af3"} & set(stages):
+        if not S.get("vault_outbox"):
+            raise SystemExit("--log needs 'vault_outbox' in the settings file")
+        cmd = [sys.executable, str(Path(__file__).with_name("log_iteration.py")), "--run", str(out), "--outbox", str(S["vault_outbox"]),
+               "--title", args.title or f"Run {out.name}"]
+        for flag, val in (("--goal", args.goal), ("--parent", args.parent)):
+            if val:
+                cmd += [flag, val]
+        print("\n[log] queueing result notes for the vault puller")
+        subprocess.run(cmd, check=True)
 
 
 if __name__ == "__main__":

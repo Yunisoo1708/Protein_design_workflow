@@ -18,6 +18,8 @@ Rules this script keeps (the vault records past fabrication, so provenance matte
   * It never overwrites an existing note (your edits are safe); pass --overwrite to replace one on purpose.
   * It writes only inside <vault>/binder-design/, never to index.md, log.md or any other note.
   * Without --vault the notes go to <run>/iteration_note/binder-design/ (copy that folder into the vault); --reindex <vault> rebuilds iterations.md.
+  * With --outbox <dir> the notes are queued in <dir>/<slug>/ and a DONE marker is written last; vault_pull.sh (on the laptop) copies queued
+    iterations into the vault and marks them PULLED. Only runs started with --log are ever queued.
 
 Reads: results_af3.csv | results_af2.csv | results_afserver.csv, run_info.json (written by design_pipeline.py), run_meta.json (written by
 setup.sh run-rfd4). Standard library only.
@@ -141,6 +143,7 @@ def main():
     ap.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE", help="extra facts for the Setup table (repeatable)")
     ap.add_argument("--vault", help="Obsidian vault folder; notes go to <vault>/binder-design/")
     ap.add_argument("--out", help="folder to write binder-design/ into when no --vault is given")
+    ap.add_argument("--outbox", help="queue folder for the vault puller: notes go to <outbox>/<slug>/binder-design/ and a DONE marker is written last")
     ap.add_argument("--top", type=int, default=10, help="rows in the top-designs table")
     ap.add_argument("--overwrite", action="store_true", help="replace existing notes (default: never)")
     ap.add_argument("--reindex", metavar="VAULT_OR_FOLDER", help="only rebuild iterations.md of that vault (or binder-design folder)")
@@ -168,7 +171,8 @@ def main():
     date = datetime.date.fromtimestamp(res.stat().st_mtime).isoformat()
     st = stats(rows)
     slug = a.slug or f"{date}-{route}-{st['n_designs']}"
-    root = (Path(a.vault).expanduser() / FOLDER) if a.vault else (Path(a.out).expanduser() if a.out else run / "iteration_note") / FOLDER
+    outbox = Path(a.outbox).expanduser() / slug if a.outbox else None
+    root = (Path(a.vault).expanduser() / FOLDER) if a.vault else (outbox / FOLDER) if outbox else (Path(a.out).expanduser() if a.out else run / "iteration_note") / FOLDER
     sha = hashlib.sha256(res.read_bytes()).hexdigest()[:16]
     versions = sorted({i.get("code_version") for i in inv if i.get("code_version")})
 
@@ -280,6 +284,10 @@ TODO: parent design, if this one was made from another (e.g. partial re-noising 
         write_new(root / "designs" / f"{slug}--{r['job']}.md", body, a.overwrite)
     if a.vault:
         reindex(root)
+    elif outbox:
+        if not (outbox / "PULLED").exists():                    # DONE last: the puller must never see a half-written bundle
+            (outbox / "DONE").write_text(f"{slug}\n{datetime.datetime.now().isoformat(timespec='seconds')}\n")
+        print(f"queued in {outbox}: the scheduled vault puller copies it into the vault")
     else:
         print(f"copy the folder into your vault, then run:  python log_iteration.py --reindex <vault>")
 

@@ -203,4 +203,27 @@ notes[0].write_text(text + "\nMY EDIT\n", encoding="utf-8")
 subprocess.run(cmd8, check=True, capture_output=True)                         # run again: the edited note must survive
 assert "MY EDIT" in notes[0].read_text(encoding="utf-8"), "an existing note must never be overwritten"
 print("Test 8 passed: iteration notes (properties, passing-design note, results copy, index) are made and never overwrite edits")
+
+# ---- Test 9: only runs started with --log are queued for the vault puller; DONE is written last and never re-queues a pulled run
+outbox = work / "outbox"
+shutil.rmtree(outbox, ignore_errors=True)
+subprocess.run([sys.executable, str(HERE.parent / "design_pipeline.py"), "--settings", str(HERE / "settings_test.py"), "--stages", "score_af2"], check=True, capture_output=True)
+assert not outbox.exists(), "a run without --log must not be queued"
+(work / "settings_log.py").write_text(f"""
+import runpy
+S = runpy.run_path(r"{HERE / 'settings_test.py'}")["SETTINGS"]
+S["vault_outbox"] = r"{outbox}"
+SETTINGS = S
+""")
+logged = subprocess.run([sys.executable, str(HERE.parent / "design_pipeline.py"), "--settings", str(work / "settings_log.py"), "--stages", "score_af2",
+                         "--log", "--title", "Logged run", "--goal", "G"], check=True, capture_output=True, text=True)
+queued = [d for d in outbox.iterdir() if d.is_dir()]
+assert len(queued) == 1 and (queued[0] / "DONE").exists() and (queued[0] / "binder-design" / "iterations").is_dir(), "a run started with --log must be queued with a DONE marker"
+assert "Logged run" in next((queued[0] / "binder-design" / "iterations").glob("*.md")).read_text(encoding="utf-8")
+(queued[0] / "PULLED").write_text("x")
+(queued[0] / "DONE").unlink()
+subprocess.run([sys.executable, str(HERE.parent / "design_pipeline.py"), "--settings", str(work / "settings_log.py"), "--stages", "score_af2", "--log", "--title", "Logged run"],
+               check=True, capture_output=True)
+assert not (queued[0] / "DONE").exists(), "a run that was already pulled must not be queued again"
+print("Test 9 passed: --log queues the notes with a DONE marker; runs without --log and already-pulled runs are not queued")
 print("\nALL TESTS PASSED")

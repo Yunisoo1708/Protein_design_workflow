@@ -7,10 +7,11 @@
 #   ./setup.sh shim            3. let RFD4's reward-guided search call your native AF3 (no Apptainer needed): checks and prints the exports
 #   ./setup.sh openfold3       4. optional: check whether OpenFold3 can be the search reward (it needs things not installed by this script)
 #   ./setup.sh example         make the two CIF files the models read (AF3 template, RFD4 input) for the target in settings.py
-#   ./setup.sh run-rfd4 [--n 50] [--search]
-#                              RFD4 generate -> convert -> AF3 check -> report. --search = reward-guided beam search (about 5x slower)
+#   ./setup.sh run-rfd4 [--n 50] [--search] [--log --title "..." --goal "..." --parent <slug>]
+#                              RFD4 generate -> convert -> AF3 check -> report. --search = reward-guided beam search (about 5x slower).
+#                              --log queues the result notes for the Obsidian vault when the run ends (pulled by vault_pull.sh on the laptop)
 #
-# Flags: --dry-run (print the commands instead of running them), --n N (number of RFD4 designs), --search.
+# Flags: --dry-run (print the commands instead of running them), --n N (number of RFD4 designs), --search, --log (+ --title/--goal/--parent).
 # Everything you may want to change is an environment variable below, or lives in settings.py.
 #
 # STATUS OF THIS SCRIPT: `check`, `shim`, `example` and `run-rfd4` were run on the machine this workflow was built on. The installing steps
@@ -34,10 +35,11 @@ RFD4_BASE_PIP="${RFD4_BASE_PIP:-rc-foundry==0.2.0 atomworks==2.2.1}"   # what th
 OF3_MODEL_DIR="${OF3_MODEL_DIR:-$HOME/of3_models}"
 PIPELINE_PY="${PIPELINE_PY:-$CONDA_ROOT/envs/rfd_bw/bin/python}"      # needs numpy + biopython (runs design_pipeline.py)
 
-DRY=0; N=""; SEARCH=0; STEP=""
+DRY=0; N=""; SEARCH=0; STEP=""; LOG=0; TITLE=""; GOAL=""; PARENT=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY=1 ;; --search) SEARCH=1 ;; --n) N="$2"; shift ;;
+    --dry-run) DRY=1 ;; --search) SEARCH=1 ;; --n) N="$2"; shift ;; --log) LOG=1 ;;
+    --title) TITLE="$2"; shift ;; --goal) GOAL="$2"; shift ;; --parent) PARENT="$2"; shift ;;
     -h|--help|help) STEP=help ;; *) STEP="${STEP:-$1}" ;;
   esac; shift
 done
@@ -216,14 +218,21 @@ PY
   run "$PIPELINE_PY" design_pipeline.py --settings settings.py
   say "4/4 report"
   run "$PY" rfd4_af3_report.py --run "$OUT" --hotspots "$(cfg HOTSPOTS)" --target_ranges "$(cfg TARGET_RANGES)"
-  say "draft notes for the Obsidian vault -> $OUT/iteration_note/binder-design/"
-  run "$PYTHON" log_iteration.py --run "$OUT" --title "RFD4 run $(date +%F): $NDES designs$([ "$SEARCH" = 1 ] && echo ', reward-guided search')" --target "$(basename "$(cfg TARGET_PDB)" .pdb)"
-  echo "  Next (see AGENTS.md): fill in Findings / Caveats / Next step, then copy that binder-design/ folder into the vault and run --reindex."
+  local t="${TITLE:-RFD4 run $(date +%F): $NDES designs$([ "$SEARCH" = 1 ] && echo ', reward-guided search')}"
+  local extra=(--title "$t" --target "$(basename "$(cfg TARGET_PDB)" .pdb)")
+  [ -n "$GOAL" ] && extra+=(--goal "$GOAL"); [ -n "$PARENT" ] && extra+=(--parent "$PARENT")
+  if [ "$LOG" = 1 ]; then
+    say "queueing result notes for the Obsidian vault (the scheduled puller on the laptop copies them)"
+    run "$PYTHON" log_iteration.py --run "$OUT" --outbox "$(cfg vault_outbox)" "${extra[@]}"
+  else
+    say "draft notes (kept here, NOT sent to the vault; add --log to queue them) -> $OUT/iteration_note/binder-design/"
+    run "$PYTHON" log_iteration.py --run "$OUT" "${extra[@]}"
+  fi
 }
 
 case "$STEP" in
   check) step_check ;; af3) step_af3 ;; rfd4) step_rfd4 ;; shim) step_shim ;; openfold3) step_openfold3 ;;
   example) step_example ;; run-rfd4) step_run_rfd4 ;;
-  help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help) awk 'NR>1 && /^#/ {print substr($0,3)} NR>1 && !/^#/ {exit}' "$0" ;;
   *) die "unknown step '$STEP' (try ./setup.sh help)" ;;
 esac
