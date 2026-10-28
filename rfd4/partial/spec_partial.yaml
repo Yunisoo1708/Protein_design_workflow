@@ -1,0 +1,14 @@
+rfd4_8_partial:
+  input: rfd4_8_input.cif
+  # chains A and B are the 132 target residues (renumbered 1-93 / 1-39), C is the 67-residue binder to re-noise
+  contig: "A1-93,/0,B1-39,/0,C1-67"
+  conditions:
+    C_CRD:
+      true:
+        - select: "chain_id == 'A' or chain_id == 'B'"
+    C_SEQ:
+      true:
+        - select: "chain_id == 'A' or chain_id == 'B'"
+    hotspot:
+      true:
+        - select: "(chain_id == 'A' and (res_id == 16 or res_id == 17)) or (chain_id == 'B' and (res_id == 10 or res_id == 11))"

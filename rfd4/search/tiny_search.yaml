@@ -1,0 +1,25 @@
+# @package _global_
+# Tiny beam search: AF3 pLDDT (designed chain) reward at steps 30 and 60 of 60.
+defaults:
+  - inference_on_user_inputs
+  - _self_
+
+metrics_tags: [design, ppi_refolding]
+
+search:
+  n_branch: 2
+  beam_width: 2
+  save_rollouts: true
+  checkpoints:
+    "30":
+      metrics: [oracle_ppi]
+      rewards:
+        oracle_ppi.plddt_coi:
+          weight: 1.0
+          clip: {min: 50.0}
+    "60":
+      metrics: [oracle_ppi]
+      rewards:
+        oracle_ppi.plddt_coi:
+          weight: 1.0
+          clip: {min: 50.0}

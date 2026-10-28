@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Fake `apptainer run ... IMAGE python SCRIPT ARGS`: ignore the container, run SCRIPT natively in the af3 conda env."""
+import os, sys
+a = sys.argv[1:]
+assert a[0] == "run", a
+env = dict(os.environ)
+i = 1
+while i < len(a):
+    if a[i] == "--env":
+        k, v = a[i + 1].split("=", 1); env[k] = v; i += 2
+    elif a[i] == "--bind":
+        i += 2
+    elif a[i] == "--nv":
+        i += 1
+    else:
+        break
+i += 1                      # the image
+assert a[i] == "python", a[i:]
+py = os.path.expanduser("~/miniconda3/envs/af3/bin/python")
+os.execve(py, [py, os.path.expanduser("~/shim/patched_worker.py")] + a[i + 1:], env)
